@@ -2,41 +2,43 @@
 # Simple CANFW Manager
 #
 import sys
-from rvilib import RVI
-import jsonrpclib
 import time
 import threading
 import os
 import base64
-import hashlib
-import hmac
 import can
+import websocket
+import json
+try:
+    import thread
+except ImportError:  #TODO use Threading instead of _thread in python3
+    import _thread as thread
 
 #For testing purposes only
 DEBUG = True
 
-rvi_canfw_prefix = "jlr.com/backend/canfw"
-available_packages = []
-
-
-
-def usage():
-    print ("Usage:", sys.argv[0], "<rvi_url> <service_id>")
-    print ("  <rvi_url>         URL of  Service Edge on a local RVI node")
-    print ("The RVI Service Edge URL can be found in")
-    print ("[backend,vehicle].config as")
-    print ("env -> rvi -> components -> service_edge -> url")
-    print ("The Service Edge URL is also logged as a notice when the")
-    print ("RVI node is started.")
-    sys.exit(255)
-
+service_name = "canfw/package_acceptor"
+host="ws://localhost:8808"
+counter = 0
+SLEEP_TIME = 0.5
+ARBITRATION = 0x7fe
 
 def package_acceptor(package, payload, num_prio):
 
+    can_conn_dead = True
+
     if DEBUG:
-        print ("Recieved rule set:", package)
-        print ("Payload is:", payload)
-        print ("Number of priorities is:", num_prio)
+        print('package_acceptor called')
+
+    while can_conn_dead:
+        try:
+            can_interface='can0'
+            bus = can.interface.Bus(can_interface, bustype='socketcan_native')
+            can_conn_dead = False
+        except:
+            if DEBUG:
+                print("No can bus active. Wait and retry: ")
+            time.sleep(2.0)
 
     for prio in range(num_prio):
         HMAC1 = payload[prio]['hmac_sig'][0:4]
@@ -79,115 +81,213 @@ def package_acceptor(package, payload, num_prio):
             print ("SEQUENCE:", SEQUENCE)
             print ("UNUSED:", UNUSED)
 
-        can_conn_dead = True
-
-        while can_conn_dead:
-            try:
-                can_interface='can0'
-                bus = can.interface.Bus(can_interace, bustype='socketcan_native')
-                can_conn_dead = False
-            except:
-                print("No can bus active. Wait and retry: ")
-                time.sleep(2.0)
         try:
             #PREP_RULE1
-            bus.send(can.Message(arbitration_id=0x01, data=[int(PRIO), 1, int(MASK[0:2]), int(MASK[2:4]), int(MASK[4:6]),
-                                    int(MASK[6:8]), int((IDXFORM+DATAXFORM)), int(RSVD)], extended_id=False))
+            if DEBUG:
+                print('rule1')
+            bus.send(can.Message(arbitration_id=ARBITRATION, data=[int(PRIO,16), 1, int(MASK[0:2],16), int(MASK[2:4],16), int(MASK[4:6],16),
+                                    int(MASK[6:8],16), int((IDXFORM+DATAXFORM),16), int(RSVD,16)], extended_id=False))
+            time.sleep(SLEEP_TIME)
 
-            #PREP_RULE2
-            bus.send(can.Message(arbitration_id=0x01, data=[int(PRIO), 2, int(FILTER[0:2]), int(FILTER[2:4]), int(FILTER[4:6]),
-                                    int(FILTER[6:8]), int(DATAOPERAND1[0:2]), int(DATAOPERAND1[2:4])], extended_id=False))
-
-            #PREP_RULE3
-            bus.send(can.Message(arbitration_id=0x01, data=[int(PRIO), 3, int(DATAOPERAND2[0:2]), int(DATAOPERAND2[2:4]), int(DATAOPERAND2[4:6]),
-                                    int(DATAOPERAND2[6:8]), int(DATAOPERAND2[8:10]), int(DATAOPERAND2[10:12])], extended_id=False))
-
-            #PREP_RULE4
-            bus.send(can.Message(arbitration_id=0x01, data=[int(PRIO), 4, int(IDOPERAND[0:2]), int(IDOPERAND[2:4]), int(IDOPERAND[4:6]),
-                                    int(IDOPERAND[6:8]), int(HMAC1[0:2]), int(HMAC1[2:4])], extended_id=False))
-
-            #PREP_RULE5
-            bus.send(can.Message(arbitration_id=0x01, data=[int(PRIO), 5, int(HMAC2[0:2]), int(HMAC2[2:4]), int(HMAC2[4:6]),
-                                    int(HMAC2[6:8]), int(HMAC2[8:10]), int(HMAC2[10:12])], extended_id=False))
-
-            #PREP_RULE6
-            bus.send(can.Message(arbitration_id=0x01, data=[int(PRIO), 6, int(HMAC3[0:2]), int(HMAC3[2:4]), int(HMAC3[4:6]),
-                                    int(HMAC3[6:8]), int(HMAC3[8:10]), int(HMAC3[10:12])], extended_id=False))
-
-            #PREP_RULE7
-            bus.send(can.Message(arbitration_id=0x01, data=[int(PRIO), 7, int(HMAC4[0:2]), int(HMAC4[2:4]), int(HMAC4[4:6]),
-                                    int(HMAC4[6:8]), int(HMAC4[8:10]), int(HMAC4[10:12])], extended_id=False))
-
-            #PREP_RULE8
-            bus.send(can.Message(arbitration_id=0x01, data=[int(PRIO), 8, int(HMAC5[0:2]), int(HMAC5[2:4]), int(HMAC5[4:6]),
-                                    int(HMAC5[6:8]), int(HMAC5[8:10]), int(HMAC5[10:12])], extended_id=False))
-
-            #PREP_RULE9
-            bus.send(can.Message(arbitration_id=0x01, data=[int(PRIO), 9, int(HMAC5[0:2]), int(HMAC5[2:4]), int(HMAC5[4:6]),
-                                    int(HMAC5[6:8]), int(HMAC5[8:10]), int(HMAC5[10:12])], extended_id=False))
-
-            #STORE_RULE
-            bus.send(can.Message(arbitration_id=0x01, data=[int(PRIO), 10, int(SEQUENCE[0:2]), int(SEQUENCE[2:4]), int(SEQUENCE[4:6]),
-                                    int(SEQUENCE[6:8]), int(UNUSED[0:2]), int(UNUSED[2:4])], extended_id=False))
         except:
-            print ("Could not send frames successfully")
+            print('rule1 failed')
+        try:
+            #PREP_RULE2
+            if DEBUG:
+                print('rule2')
+            bus.send(can.Message(arbitration_id=ARBITRATION, data=[int(PRIO,16), 2, int(FILTER[0:2],16), int(FILTER[2:4],16), int(FILTER[4:6],16),
+                                    int(FILTER[6:8],16), int(DATAOPERAND1[0:2],16), int(DATAOPERAND1[2:4],16)], extended_id=False))
+            time.sleep(SLEEP_TIME)
+     
+        except:
+            if DEBUG:
+                print('rule2 failed')
+
+        try:
+            #PREP_RULE3
+            if DEBUG:
+                print('rule3')
+            bus.send(can.Message(arbitration_id=ARBITRATION, data=[int(PRIO,16), 3, int(DATAOPERAND2[0:2],16), int(DATAOPERAND2[2:4],16), int(DATAOPERAND2[4:6],16),
+                                    int(DATAOPERAND2[6:8],16), int(DATAOPERAND2[8:10],16), int(DATAOPERAND2[10:12],16)], extended_id=False))
+            time.sleep(SLEEP_TIME)
+     
+        except:
+            if DEBUG:
+                print('rule3 failed')
+
+        try:
+            #PREP_RULE4
+            if DEBUG:
+                print('rule4')
+            bus.send(can.Message(arbitration_id=ARBITRATION, data=[int(PRIO,16), 4, int(IDOPERAND[0:2],16), int(IDOPERAND[2:4],16), int(IDOPERAND[4:6],16),
+                                    int(IDOPERAND[6:8],16), int(HMAC1[0:2],16), int(HMAC1[2:4],16)], extended_id=False))
+            time.sleep(SLEEP_TIME)
+     
+        except:
+            if DEBUG:
+                print('rule4 failed')
+
+        try:
+            #PREP_RULE5
+            if DEBUG:
+                print('rule5')
+            bus.send(can.Message(arbitration_id=ARBITRATION, data=[int(PRIO,16), 5, int(HMAC2[0:2],16), int(HMAC2[2:4],16), int(HMAC2[4:6],16),
+                                    int(HMAC2[6:8],16), int(HMAC2[8:10],16), int(HMAC2[10:12],16)], extended_id=False))
+            time.sleep(SLEEP_TIME)
+     
+        except:
+            if DEBUG:
+                print('rule5 failed')
+
+        try:
+            #PREP_RULE6
+            if DEBUG:
+                print('rule6')
+            bus.send(can.Message(arbitration_id=ARBITRATION, data=[int(PRIO,16), 6, int(HMAC3[0:2],16), int(HMAC3[2:4],16), int(HMAC3[4:6],16),
+                                    int(HMAC3[6:8],16), int(HMAC3[8:10],16), int(HMAC3[10:12],16)], extended_id=False))
+
+            time.sleep(SLEEP_TIME)
+     
+        except:
+            if DEBUG:
+                print('rule6 failed')
+
+        try:
+            #PREP_RULE7
+            if DEBUG:
+                print('rule7')
+            bus.send(can.Message(arbitration_id=ARBITRATION, data=[int(PRIO,16), 7, int(HMAC4[0:2],16), int(HMAC4[2:4],16), int(HMAC4[4:6],16),
+                                    int(HMAC4[6:8],16), int(HMAC4[8:10],16), int(HMAC4[10:12],16)], extended_id=False))
+            time.sleep(SLEEP_TIME)
+     
+        except:
+            if DEBUG:
+                print('rule7 failed')
+            #PREP_RULE8
+
+        try:
+            if DEBUG:
+                print('rule8')
+            bus.send(can.Message(arbitration_id=ARBITRATION, data=[int(PRIO,16), 8, int(HMAC5[0:2],16), int(HMAC5[2:4],16), int(HMAC5[4:6],16),
+                                    int(HMAC5[6:8],16), int(HMAC5[8:10],16), int(HMAC5[10:12],16)], extended_id=False))
+            time.sleep(SLEEP_TIME)
+     
+        except:
+            if DEBUG:
+                print('rule8 failed')
+
+        try:
+            #PREP_RULE9
+            if DEBUG:
+                print('rule9')
+            bus.send(can.Message(arbitration_id=ARBITRATION, data=[int(PRIO,16), 9, int(HMAC6[0:2],16), int(HMAC6[2:4],16), int(HMAC6[4:6],16),
+                                    int(HMAC6[6:8],16), int(HMAC6[8:10],16), int(HMAC6[10:12],16)], extended_id=False))
+            time.sleep(SLEEP_TIME)
+     
+        except:
+            if DEBUG:
+                print('rule9 failed')
+
+        try:
+            #STORE_RULE
+            if DEBUG:
+                print('rule10')
+            bus.send(can.Message(arbitration_id=ARBITRATION, data=[int(PRIO,16), 10, int(SEQUENCE[0:2],16), int(SEQUENCE[2:4],16), int(SEQUENCE[4:6],16),
+                                    int(SEQUENCE[6:8],16), int(UNUSED[0:2],16), int(UNUSED[2:4],16)], extended_id=False))
+            time.sleep(SLEEP_TIME)
+     
+        except:
+            if DEBUG:
+                print ("rule 10 failed Could not send frames successfully")
 
 
     return {u'status': 0}
 
+def on_message(ws, message):
+    message_dict = json.loads(message)
 
 
-#
-# Check that we have the correct arguments
-#
-#if len(sys.argv) != 2:
-#    usage()
-
-# Grab the URL to use
-#[ progname, rvi_url ] = sys.argv
-rvi_url = "http://localhost:8811"
-
-# setup the service names we will register with
-# The complete service name will be:
-#  jlr.com/vin/1234/hvac/publish
-#       - and -
-#  jlr.com/vin/1234/hvac/subscribe
-#
-# Replace 1234 with the VIN number setup in the
-# node_service_prefix entry in vehicle.config
-
-# Setup an outbound JSON-RPC connection to the RVI Service Edge.
-# Setup a connection to the local RVI node
-rvi_server = RVI("http://localhost:8811")
-rvi_server.start_serve_thread()
-
-
-# We may see traffic immediately from the RVI node when
-# we register. Let's sleep for a bit to allow the emulator service
-# thread to get up to speed.
-time.sleep(0.5)
-
-# Repeat registration until we succeeed
-rvi_dead = True
-
-while rvi_dead:
-    try:
-        full_package_acceptor_service_name = rvi_server.register_service("/canfw/package_acceptor", package_acceptor )
-        rvi_dead = False
-    except:
-        print ("No rvi. Wait and retry: ")
-        time.sleep(2.0)
+    if DEBUG:
+        print(message)
+        if message_dict['method'] == 'message':
+            print("###########THIS IS A MESSAGE#############")
+            for key, value in message_dict.items():
+                print(key, value)
+            print("############END OF MESSAGE###############")
+##############################################################################################################
+##############################################################################################################
+########################################Check for the correct parameters######################################
+    if message_dict['method'] == 'message':
+        try:
+            params = message_dict['params']['parameters']
+            if DEBUG:
+                print(params)
+            package_name = params['package']
+            str_payload = params['payload']
+            number_prios = params['num_prio']
+            if DEBUG:
+                print('forwarding message payload to package_acceptor')
+                print('package_name: ' + package_name)
+                print('str_payload: ' + str(str_payload))
+                print('number_prios: ' + str(number_prios))
+            try:
+                package_acceptor(package=package_name, payload=str_payload, num_prio=number_prios)
+            except:
+                if DEBUG:
+                    print('package_acceptor forwarding failed')
+        except:
+            if DEBUG:
+                print('Incorrect Parameters will not forward to package_acceptor')
+##############################################################################################################
+##############################################################################################################
 
 
-print ("FW Manager")
-print ("Vehicle RVI node URL:       ", rvi_url)
-print ("Full Package Acceptor service name :  ", full_package_acceptor_service_name)
+
+def on_error(ws, error):
+    if DEBUG:
+        print(error)
 
 
-try:
+def on_close(ws):
+    if DEBUG:
+        print("### closed ###")
+
+
+def on_open(ws):
+    def run(*args):
+        payload = {}
+        payload['json-rpc'] = "2.0"
+        payload['id'] = counter
+        payload['method'] = "register_service"
+        payload['params'] = {"service_name":service_name}
+        
+        ws.send(json.dumps(payload))
+
+    thread.start_new_thread(run, ())
+
+
+if __name__ == "__main__":
+    websocket.enableTrace(True)
+
     while True:
-        time.sleep(1.0)
+        if len(sys.argv) < 2:
+            host = "ws://localhost:8808"
+        else:
+            host = sys.argv[1]
+        ws = websocket.WebSocketApp(host,
+                                    on_message = on_message,
+                                    on_error = on_error,
+                                    on_close = on_close)
+        ws.on_open = on_open
+        if ws.run_forever() is None:
+            if DEBUG:
+                print('No RVI. Wait and retry.')
+                time.sleep(2)
+            continue
 
-except KeyboardInterrupt:
-    print('^C received, shutting down server')
-    # os.remove(canfw_manager.py)
+    try:
+        while True:
+            time.sleep(1.0)
+
+    except KeyboardInterrupt:
+        print('^C received, shutting down server')
